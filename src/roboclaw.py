@@ -7,7 +7,7 @@ from typing import (Any, ClassVar, Dict, Final, Mapping, Optional, Sequence,
                     Tuple)
 
 from typing_extensions import Self
-from viam.components.motor import *
+from viam.components.motor import Motor
 from viam.errors import *
 from viam.logging import getLogger
 from viam.module.module import Module
@@ -119,9 +119,9 @@ class ViamRoboclaw(Motor, Reconfigurable):
     ) -> float:
         ticks = 0
         if self.motor_channel == 1:
-            ticks = self.roboclaw.ReadEncM1(self.address)
+            _, ticks, _ = self.roboclaw.ReadEncM1(self.address)
         elif self.motor_channel == 2:
-            ticks = self.roboclaw.ReadEncM2(self.address)
+            _, ticks, _ = self.roboclaw.ReadEncM2(self.address)
         return ticks / self.ticks_per_rotation
 
     async def get_properties(
@@ -131,10 +131,9 @@ class ViamRoboclaw(Motor, Reconfigurable):
         timeout: Optional[float] = None,
         **kwargs
     ) -> Motor.Properties:
-        props = Motor.Properties
-        if self.ticks_per_rotation != 0:
-            props.position_reporting = True
-        return props
+        if self.ticks_per_rotation != 0.0:
+            return Motor.Properties(position_reporting=True)
+        return Motor.Properties(position_reporting=False)
 
     async def go_for(
         self,
@@ -191,7 +190,7 @@ class ViamRoboclaw(Motor, Reconfigurable):
         
         rpm = abs(rpm)
         pos = await self.get_position()
-        return await self.go_for(rpm, position_revolutions-pos, extra)
+        return await self.go_for(rpm, position_revolutions-pos)
 
     async def is_moving(
         self,
@@ -277,14 +276,11 @@ class ViamRoboclaw(Motor, Reconfigurable):
         
         # if encoder are connected, convert rpm to ticks per second for roboclaw commands
         ticks_per_second = rpm * self.ticks_per_rotation / 60.0
-        dist = math.inf
-        if rpm < 0:
-            dist = -math.inf
 
         if self.motor_channel == 1:
-            return self.roboclaw.SpeedDistanceM1(self.address, ticks_per_second, dist, 1)
+            return self.roboclaw.SpeedM1(self.address, int(ticks_per_second))
         elif self.motor_channel == 2:
-            return self.roboclaw.SpeedDistanceM2(self.address, ticks_per_second, dist, 1)
+            return self.roboclaw.SpeedM2(self.address, int(ticks_per_second))
 
     async def stop(
         self,
