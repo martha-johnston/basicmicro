@@ -11,20 +11,22 @@ from viam.components.motor import *
 from viam.errors import *
 from viam.logging import getLogger
 from viam.module.module import Module
+from viam.resource.registry import Registry, ResourceCreatorRegistration
+from viam.module.types import Reconfigurable
 from viam.proto.app.robot import ComponentConfig
 from viam.proto.common import ResourceName
 from viam.resource.base import ResourceBase
-from viam.resource.easy_resource import EasyResource
+# from viam.resource.easy_resource import EasyResource
 from viam.resource.types import Model, ModelFamily
-from roboclaw_3 import Roboclaw as OfficialRoboclaw
+from src.roboclaw_3 import Roboclaw as OfficialRoboclaw
 
 # Note that this maxRPM value was determined through very limited testing.
 max_rpm = 250
 minutes_to_ms = 60000
 valid_baud_rates = {460800, 230400, 115200, 57600, 38400, 19200, 9600, 2400}
-pwm_scale_constant = 327.67
+pwm_scale_constant = 32767
 
-class Roboclaw(Motor, EasyResource):
+class ViamRoboclaw(Motor, Reconfigurable):
     MODEL: ClassVar[Model] = Model(
         ModelFamily("martha", "basicmicro"), "roboclaw"
     )
@@ -70,19 +72,19 @@ class Roboclaw(Motor, EasyResource):
             Sequence[str]: A list of implicit dependencies
         """
         if config.attributes.fields["motor_channel"].number_value < 1 or config.attributes.fields["motor_channel"].number_value > 2:
-            raise ValidationError(f"roboclaw motor channel has to be 1 or 2, but is {config.attributes.fields["motor_channel"].number_value}")
+            raise ValidationError(f'roboclaw motor channel has to be 1 or 2, but is {config.attributes.fields["motor_channel"].number_value}')
             
         if config.attributes.fields["serial_path"].string_value == "":
             raise ValidationError("Error validating, missing required field: 'serial_path'")
         
         if config.attributes.fields["address"].number_value != 0 and (config.attributes.fields["address"].number_value < 128 
             or config.attributes.fields["address"].number_value > 135):
-            raise ValidationError("serial address nust be between 128 and 135")
+            raise ValidationError("serial address must be between 128 and 135")
         
         if config.attributes.fields["ticks_per_rotation"].number_value < 0:
             raise ValidationError("ticks per rotation must be a positive number")
         
-        if not valid_baud_rates(config.attributes.fields["serial_baud_rate"].number_value):
+        if not validate_baud_rates(config.attributes.fields["serial_baud_rate"].number_value):
             raise ValidationError(f"baud rate invalid, must be one of these values {valid_baud_rates}")
         
         return []
@@ -101,7 +103,7 @@ class Roboclaw(Motor, EasyResource):
         self.ticks_per_rotation = config.attributes.fields["ticks_per_rotation"].number_value
         self.baud_rate = config.attributes.fields["serial_baud_rate"].number_value
         self.motor_channel = config.attributes.fields["motor_channel"].number_value
-        self.address = config.attributes.fields["address"].number_value
+        self.address = (int(config.attributes.fields["address"].number_value))
         if self.address == 0:
             self.address = 128
 
@@ -130,7 +132,9 @@ class Roboclaw(Motor, EasyResource):
         **kwargs
     ) -> Motor.Properties:
         props = Motor.Properties
-        props.position_reporting = True
+        if self.ticks_per_rotation != 0:
+            props.position_reporting = True
+        return props
 
     async def go_for(
         self,
@@ -144,12 +148,9 @@ class Roboclaw(Motor, EasyResource):
         if revolutions == 0:
             raise ViamError(f"Cannot move motor for 0 revolutions")
         
-        warning, error = check_speed(rpm, max_rpm)
+        warning = check_speed(rpm, max_rpm)
         if warning != "":
             self.logger.warning(warning)
-        if error != None:
-            self.logger.error(error)
-            raise error
 
         # If no encoders are present, distance traveled is estimated based on max rpm
         if self.ticks_per_rotation == 0:
@@ -166,9 +167,9 @@ class Roboclaw(Motor, EasyResource):
         ticks = revolutions * self.ticks_per_rotation
         ticks_per_second = rpm * self.ticks_per_rotation / 60.0
         if self.motor_channel == 1:
-            self.roboclaw.SpeedDistanceM1(self.address, ticks_per_second, ticks, 1)
+            self.roboclaw.SpeedDistanceM1(self.address, int(ticks_per_second), int(ticks), 1)
         elif self.motor_channel == 2:
-            self.roboclaw.SpeedDistanceM2(self.address, ticks_per_second, ticks, 1)
+            self.roboclaw.SpeedDistanceM2(self.address, int(ticks_per_second), int(ticks), 1)
 
         # wait until the GoFor movement is complete
         while await self.is_moving():
@@ -192,8 +193,14 @@ class Roboclaw(Motor, EasyResource):
         pos = await self.get_position()
         return await self.go_for(rpm, position_revolutions-pos, extra)
 
-    async def is_moving(self) -> bool:
-        move, _ = self.is_powered()
+    async def is_moving(
+        self,
+        *,
+        extra: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+        **kwargs
+    ) -> bool:
+        move, _ = await self.is_powered()
         return move
 
     async def is_powered(
@@ -203,7 +210,7 @@ class Roboclaw(Motor, EasyResource):
         timeout: Optional[float] = None,
         **kwargs
     ) -> Tuple[bool, float]:
-        pwm1, pwm2, _ = self.roboclaw.ReadPWMs(self.address)
+        _, pwm1, pwm2 = self.roboclaw.ReadPWMs(self.address)
         if self.motor_channel == 1:
             return pwm1 != 0, float(pwm1)/pwm_scale_constant
         if self.motor_channel == 2:
@@ -242,9 +249,9 @@ class Roboclaw(Motor, EasyResource):
             power = -1
 
         if self.motor_channel == 1:
-            return self.roboclaw.DutyM1(self.address, power*pwm_scale_constant)
+            return self.roboclaw.DutyM1(self.address, int(power*pwm_scale_constant))
         elif self.motor_channel == 2:
-            return self.roboclaw.DutyM2(self.address, power*pwm_scale_constant)
+            return self.roboclaw.DutyM2(self.address, int(power*pwm_scale_constant))
 
     async def set_rpm(
         self,
@@ -260,8 +267,8 @@ class Roboclaw(Motor, EasyResource):
         
         # if no encoders are connected, estiimate speed using max rpm
         if self.ticks_per_rotation == 0:
-            self.logger.warning(f"speed is an estimation based on the max rpm ({max_rpm}), but speed and power
-                                do not have a linear relationship; for increased accuracey, connect encoders")
+            self.logger.warning(f"speed is an estimation based on the max rpm ({max_rpm}), but speed and power"+
+                                " do not have a linear relationship; for increased accuracey, connect encoders")
             if abs(rpm) > max_rpm:
                 rpm = min(rpm, max_rpm)
                 rpm = max(rpm, -max_rpm)
@@ -312,3 +319,21 @@ def go_for_math(rpm, revolutions):
     power_pct = abs(rpm) / max_rpm * dir
     wait_dur = abs(revolutions/rpm) * minutes_to_ms
     return power_pct, wait_dur
+
+async def main():
+    """
+    This function creates and starts a new module, after adding all desired
+    resource models. Resource creators must be registered to the resource
+    registry before the module adds the resource model.
+    """
+    Registry.register_resource_creator(
+        Motor.SUBTYPE,
+        ViamRoboclaw.MODEL,
+        ResourceCreatorRegistration(ViamRoboclaw.new, ViamRoboclaw.validate_config))
+    module = Module.from_args()
+
+    module.add_model_from_registry(Motor.SUBTYPE, ViamRoboclaw.MODEL)
+    await module.start()
+
+if __name__ == "__main__":
+    asyncio.run(main())
