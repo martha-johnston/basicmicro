@@ -2,7 +2,7 @@
   "$schema": "https://dl.viam.dev/module.schema.json",
   "module_id": "martha:basicmicro",
   "visibility": "public",
-  "url": "",
+  "url": "https://github.com/martha-johnston/basicmicro",
   "description": "Modular motor component: roboclaw",
   "models": [
     {
@@ -10,7 +10,7 @@
       "model": "martha:basicmicro:roboclaw"
     }
   ],
-  "entrypoint": "dist/main",
+  "entrypoint": "dist/roboclaw",
   "build": {
     "build": "./build.sh",
     "setup": "./setup.sh",
